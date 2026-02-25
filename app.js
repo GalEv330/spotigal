@@ -1,5 +1,5 @@
 // WalkPlayer — Web Audio batch scheduling for iOS lock-screen continuity
-// Audio files are served from /songs on the same origin, named 01.mp3, 02.mp3, …
+// Audio files are served from /songs on the same origin.
 
 // Gradient pairs for the album-art placeholder; cycles per track index.
 const TRACK_GRADIENTS = [
@@ -13,6 +13,39 @@ const TRACK_GRADIENTS = [
   ['#2c003e', '#a855f7'],
 ];
 
+// Parse "Artist - Title.mp3" filenames. Falls back to the bare name as title.
+function parseSongMeta(filename) {
+  const name = filename.replace(/\.mp3$/i, "");
+  const dash = name.indexOf(" - ");
+  if (dash !== -1) {
+    return { artist: name.slice(0, dash).trim(), title: name.slice(dash + 3).trim() };
+  }
+  return { artist: "—", title: name };
+}
+
+// Fetch /songs/ directory listing (works with python3 -m http.server).
+// Returns an array of song objects, or null if the listing is unavailable.
+async function scanSongsDir() {
+  try {
+    const res = await fetch("/songs/");
+    if (!res.ok) return null;
+    const html = await res.text();
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const songs = [];
+    for (const a of doc.querySelectorAll("a[href]")) {
+      const href = a.getAttribute("href");
+      if (!href.toLowerCase().endsWith(".mp3")) continue;
+      // href is already URL-encoded by the server; use it directly as the path.
+      const filename = decodeURIComponent(href.split("/").pop());
+      const { title, artist } = parseSongMeta(filename);
+      songs.push({ title, artist, file: `/songs/${href.split("/").pop()}` });
+    }
+    return songs.length ? songs : null;
+  } catch {
+    return null;
+  }
+}
+
 function buildSongs(count) {
   return Array.from({ length: count }, (_, i) => ({
     title: `Track ${i + 1}`,
@@ -21,7 +54,7 @@ function buildSongs(count) {
   }));
 }
 
-let SONGS = buildSongs(12);
+let SONGS = buildSongs(1); // placeholder until scanSongsDir() resolves
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,8 +76,7 @@ const ui = {
   playText:     $("playText"),
 
   playlistSize: $("playlistSize"),
-  batchSize:    $("batchSize"),
-  btnReseed:    $("btnReseed"),
+  batchCustom:  $("batchCustom"),
 
   list:         $("list"),
 };
@@ -75,7 +107,6 @@ class BatchScheduledPlayer {
     this.batchSize = 5;
     this.scheduled = []; // [{ index, startTime, endTime, source, duration }]
 
-    // decoded buffer cache (decoded PCM is large; keep it bounded)
     this.bufferCache = new Map();
     this.cacheOrder = [];
     this.maxCached = 8;
@@ -83,43 +114,30 @@ class BatchScheduledPlayer {
 
   async ensureContext() {
     if (this.ctx) return;
-
     const AC = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AC({ latencyHint: "playback" });
-
     this.gain = this.ctx.createGain();
     this.gain.gain.value = 1.0;
     this.gain.connect(this.ctx.destination);
-
     this.setupMediaSession();
   }
 
-  setBatchSize(v) {
-    this.batchSize = v;
-  }
+  setBatchSize(v) { this.batchSize = v; }
 
   async play() {
     await this.ensureContext();
-
-    // iOS requires a user gesture; play() is always called from a button click.
-    if (this.ctx.state === "suspended") {
-      await this.ctx.resume();
-    }
-
+    if (this.ctx.state === "suspended") await this.ctx.resume();
     if (this.scheduled.length === 0) {
       await this.rebuildBatchFrom(this.idx, { autostart: true });
       return;
     }
-
     this.isPlaying = true;
     this.setPlaybackState("playing");
   }
 
   async pause() {
     if (!this.ctx) return;
-    if (this.ctx.state === "running") {
-      await this.ctx.suspend();
-    }
+    if (this.ctx.state === "running") await this.ctx.suspend();
     this.isPlaying = false;
     this.setPlaybackState("paused");
   }
@@ -164,19 +182,12 @@ class BatchScheduledPlayer {
 
     this.isLoading = true;
     setStatus("Loading + decoding batch…");
-
     this.stopAllScheduled();
 
-    const batchCount = this.batchSize === Infinity
-      ? this.songs.length
-      : this.batchSize;
+    const batchCount = Math.min(this.batchSize, this.songs.length);
+    const indices = Array.from({ length: batchCount },
+      (_, i) => (startIndex + i) % this.songs.length);
 
-    const indices = [];
-    for (let i = 0; i < Math.min(batchCount, this.songs.length); i++) {
-      indices.push((startIndex + i) % this.songs.length);
-    }
-
-    // Decode all buffers first, then schedule sample-accurately.
     const buffers = [];
     for (const i of indices) {
       const buf = await this.loadDecodedBuffer(this.songs[i].file);
@@ -190,18 +201,9 @@ class BatchScheduledPlayer {
       const source = this.ctx.createBufferSource();
       source.buffer = item.buffer;
       source.connect(this.gain);
-
       const duration = item.buffer.duration;
       source.start(t);
-
-      this.scheduled.push({
-        index: item.index,
-        source,
-        startTime: t,
-        endTime: t + duration,
-        duration,
-      });
-
+      this.scheduled.push({ index: item.index, source, startTime: t, endTime: t + duration, duration });
       t += duration;
     }
 
@@ -219,31 +221,22 @@ class BatchScheduledPlayer {
     }
 
     this.updateNowPlayingMetadata(startIndex);
-
-    // Schedule wall-clock timers to update lock-screen metadata at each
-    // track boundary. May be throttled on iOS when screen is off, but still
-    // helps on wake-up and when the app is in the foreground.
     scheduleMetadataUpdates();
   }
 
   async loadDecodedBuffer(url) {
     if (this.bufferCache.has(url)) return this.bufferCache.get(url);
-
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status}`);
     const arr = await res.arrayBuffer();
-
     const buf = await new Promise((resolve, reject) => {
       this.ctx.decodeAudioData(arr, resolve, reject);
     });
-
     this.bufferCache.set(url, buf);
     this.cacheOrder.push(url);
-
     while (this.cacheOrder.length > this.maxCached) {
       this.bufferCache.delete(this.cacheOrder.shift());
     }
-
     return buf;
   }
 
@@ -259,33 +252,19 @@ class BatchScheduledPlayer {
   getProgress() {
     const cur = this.getCurrent();
     if (!cur) return { ratio: 0, pos: 0, dur: 0, index: this.idx };
-
     const t = this.ctx.currentTime;
     const pos = Math.max(0, t - cur.startTime);
     const dur = cur.duration;
     return { ratio: dur > 0 ? clamp01(pos / dur) : 0, pos, dur, index: cur.index };
   }
 
-  // --- Media Session (lock screen / Bluetooth) ---
   setupMediaSession() {
     if (!("mediaSession" in navigator)) return;
     try {
-      navigator.mediaSession.setActionHandler("play", async () => {
-        await this.play();
-        render();
-      });
-      navigator.mediaSession.setActionHandler("pause", async () => {
-        await this.pause();
-        render();
-      });
-      navigator.mediaSession.setActionHandler("nexttrack", async () => {
-        await this.next();
-        render();
-      });
-      navigator.mediaSession.setActionHandler("previoustrack", async () => {
-        await this.prev();
-        render();
-      });
+      navigator.mediaSession.setActionHandler("play", async () => { await this.play(); render(); });
+      navigator.mediaSession.setActionHandler("pause", async () => { await this.pause(); render(); });
+      navigator.mediaSession.setActionHandler("nexttrack", async () => { await this.next(); render(); });
+      navigator.mediaSession.setActionHandler("previoustrack", async () => { await this.prev(); render(); });
     } catch {}
   }
 
@@ -313,16 +292,13 @@ class BatchScheduledPlayer {
   }
 }
 
-// --- Scheduled metadata timers ---
-// Best-effort: fires on wake-up even if throttled while screen is off.
+// --- Scheduled metadata timers for lock-screen track transitions ---
 const metadataTimers = [];
 
 function scheduleMetadataUpdates() {
   metadataTimers.forEach(id => clearTimeout(id));
   metadataTimers.length = 0;
-
   if (!player.ctx || !player.scheduled.length) return;
-
   const audioNow = player.ctx.currentTime;
   for (const seg of player.scheduled) {
     const delayMs = (seg.startTime - audioNow) * 1000 - 50;
@@ -384,44 +360,36 @@ function markActive(index) {
 function render(forceMetadata = false) {
   const cur = player.getCurrent();
   const p = player.getProgress();
-
   const idx = cur ? cur.index : player.idx;
   const song = SONGS[idx];
 
-  // Now playing text
   ui.npTitle.textContent  = song ? song.title  : "Not playing";
   ui.npArtist.textContent = song ? song.artist : "Tap Play to start";
   ui.npMeta.textContent   = song ? `Track ${idx + 1} / ${SONGS.length}` : "—";
 
-  // Album art gradient
   const [c1, c2] = TRACK_GRADIENTS[idx % TRACK_GRADIENTS.length];
   ui.albumArt.style.background = `linear-gradient(135deg, ${c1}, ${c2})`;
 
-  // Next up
   const nextIdx  = (idx + 1) % SONGS.length;
   const nextSong = SONGS[nextIdx];
   if (nextSong && SONGS.length > 1) {
-    ui.nextUpTrack.textContent = `${nextSong.title}`;
-    if (nextSong.artist !== "—") {
-      ui.nextUpTrack.textContent += ` · ${nextSong.artist}`;
-    }
+    ui.nextUpTrack.textContent = nextSong.artist !== "—"
+      ? `${nextSong.title} · ${nextSong.artist}`
+      : nextSong.title;
   } else {
     ui.nextUpTrack.textContent = "—";
   }
 
-  // Progress
   ui.progressBar.style.width = `${Math.round(p.ratio * 100)}%`;
   ui.timeCur.textContent = fmtTime(p.pos);
   ui.timeTot.textContent = fmtTime(p.dur);
 
-  // Buttons
   const playing = player.isPlaying && player.ctx?.state === "running";
   ui.playIcon.textContent = playing ? "⏸" : "▶️";
   ui.playText.textContent = playing ? "Pause" : "Play";
 
   markActive(idx);
 
-  // MediaSession position state — helps lock-screen scrubber show progress.
   if (player.ctx && player.isPlaying && p.dur > 0) {
     try {
       navigator.mediaSession?.setPositionState({
@@ -435,78 +403,81 @@ function render(forceMetadata = false) {
   if (forceMetadata && song) player.updateNowPlayingMetadata(idx);
 }
 
-function parseBatchValue(v) {
-  if (v === "all") return Infinity;
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : 5;
+// --- Batch size controls ---
+let currentBatchSize = 5;
+
+function applyBatchSize(val) {
+  currentBatchSize = val;
+  player.setBatchSize(val);
+  document.querySelectorAll(".batch-btn").forEach(btn => {
+    btn.classList.toggle("active", Number(btn.dataset.val) === val);
+  });
+  if (ui.batchCustom.value !== String(val)) {
+    ui.batchCustom.value = val;
+  }
 }
 
-// --- Controls ---
-ui.btnPlay.addEventListener("click", async () => {
-  try {
-    await player.toggle();
-    render(true);
-  } catch (e) {
-    setStatus(`Error: ${e.message}`);
-  }
+document.querySelectorAll(".batch-btn").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const val = Math.max(1, parseInt(btn.dataset.val, 10));
+    applyBatchSize(val);
+    if (player.ctx && player.scheduled.length) {
+      try {
+        await player.rebuildBatchFrom(player.idx, { autostart: player.isPlaying });
+        render(true);
+      } catch (e) { setStatus(`Error: ${e.message}`); }
+    } else {
+      setStatus(`Batch size set to ${val}.`);
+    }
+  });
 });
 
-ui.btnNext.addEventListener("click", async () => {
-  try {
-    await player.next();
-    render(true);
-  } catch (e) {
-    setStatus(`Error: ${e.message}`);
-  }
-});
-
-ui.btnPrev.addEventListener("click", async () => {
-  try {
-    await player.prev();
-    render(true);
-  } catch (e) {
-    setStatus(`Error: ${e.message}`);
-  }
-});
-
-ui.batchSize.addEventListener("change", async (ev) => {
-  const bs = parseBatchValue(ev.target.value);
-  player.setBatchSize(bs);
-
+ui.batchCustom.addEventListener("change", async (ev) => {
+  const val = Math.max(1, Math.min(999, parseInt(ev.target.value, 10) || 1));
+  ev.target.value = val;
+  applyBatchSize(val);
   if (player.ctx && player.scheduled.length) {
     try {
       await player.rebuildBatchFrom(player.idx, { autostart: player.isPlaying });
       render(true);
-    } catch (e) {
-      setStatus(`Error: ${e.message}`);
-    }
+    } catch (e) { setStatus(`Error: ${e.message}`); }
   } else {
-    setStatus(`Batch size set to ${bs === Infinity ? "ALL" : bs}.`);
+    setStatus(`Batch size set to ${val}.`);
   }
 });
 
-ui.btnReseed.addEventListener("click", async () => {
+// --- Playback controls ---
+ui.btnPlay.addEventListener("click", async () => {
+  try { await player.toggle(); render(true); }
+  catch (e) { setStatus(`Error: ${e.message}`); }
+});
+
+ui.btnNext.addEventListener("click", async () => {
+  try { await player.next(); render(true); }
+  catch (e) { setStatus(`Error: ${e.message}`); }
+});
+
+ui.btnPrev.addEventListener("click", async () => {
+  try { await player.prev(); render(true); }
+  catch (e) { setStatus(`Error: ${e.message}`); }
+});
+
+$("btnReseed").addEventListener("click", async () => {
   try {
     await player.rebuildBatchFrom(player.idx, { autostart: player.isPlaying });
     render(true);
-  } catch (e) {
-    setStatus(`Error: ${e.message}`);
-  }
+  } catch (e) { setStatus(`Error: ${e.message}`); }
 });
 
 ui.playlistSize.addEventListener("change", (ev) => {
   const n = Math.max(1, Math.min(999, parseInt(ev.target.value, 10) || 1));
   ev.target.value = n;
-
   SONGS = buildSongs(n);
   player.songs = SONGS;
   player.idx = Math.min(player.idx, SONGS.length - 1);
-
-  // Stop any in-progress batch (files may no longer exist)
   player.stopAllScheduled();
   player.isPlaying = false;
   player.setPlaybackState("paused");
-
   buildList();
   setStatus(`Playlist set to ${n} track(s). Press Play to start.`);
   render(true);
@@ -517,18 +488,15 @@ let lastRenderedTrackIndex = -1;
 
 function tick() {
   render(false);
-
   const cur = player.getCurrent();
   if (cur && cur.index !== lastRenderedTrackIndex) {
     lastRenderedTrackIndex = cur.index;
     player.updateNowPlayingMetadata(cur.index);
     markActive(cur.index);
   }
-
   requestAnimationFrame(tick);
 }
 
-// Refresh metadata / UI when returning from the lock screen or app switcher.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
     const cur = player.getCurrent();
@@ -538,10 +506,29 @@ document.addEventListener("visibilitychange", () => {
 });
 
 // --- Init ---
-buildList();
-player.setBatchSize(parseBatchValue(ui.batchSize.value));
-render(true);
-requestAnimationFrame(tick);
+async function init() {
+  // Try to auto-discover songs from the /songs/ directory listing.
+  const scanned = await scanSongsDir();
+  if (scanned) {
+    SONGS = scanned;
+    player.songs = SONGS;
+    ui.playlistSize.value = SONGS.length;
+    setStatus(`Found ${SONGS.length} song(s) in /songs/.`);
+  } else {
+    // Fall back to numbered files based on the playlist size input.
+    const n = Math.max(1, parseInt(ui.playlistSize.value, 10) || 12);
+    SONGS = buildSongs(n);
+    player.songs = SONGS;
+    setStatus("Could not scan /songs/. Set playlist size manually.");
+  }
+
+  buildList();
+  applyBatchSize(currentBatchSize);
+  render(true);
+  requestAnimationFrame(tick);
+}
+
+init();
 
 // PWA service worker
 if ("serviceWorker" in navigator) {

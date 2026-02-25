@@ -1,5 +1,9 @@
 # Running WalkPlayer
 
+> **No build step.** This is plain HTML + CSS + JS.
+> Save a file → refresh the browser. That's it.
+> If you don't see your changes, see **"Why don't I see my changes?"** below.
+
 ## Start
 
 Pick any of these — whichever you have installed:
@@ -30,6 +34,36 @@ Then open **http://localhost:8080** in your browser.
 
 Audio is batch-scheduled so it keeps playing with the screen off.
 The lock screen controls (play/pause/skip) work via Media Session.
+
+## Why don't I see my changes?
+
+The service worker (`sw.js`) caches all app files so they load fast offline.
+This means a normal refresh still shows the old version.
+
+**Quickest fix — hard refresh bypassing cache:**
+
+| Browser | Shortcut |
+|---------|----------|
+| Chrome / Edge (Mac) | `Cmd + Shift + R` |
+| Chrome / Edge (Windows) | `Ctrl + Shift + R` |
+| Safari | `Cmd + Option + R` |
+| Firefox | `Ctrl + Shift + R` |
+
+**Better for active development — tell the service worker to always update:**
+
+1. Open **DevTools** (`F12` or `Cmd+Option+I`)
+2. Go to **Application** tab → **Service Workers** (Chrome/Edge)
+   or **Storage** → **Service Workers** (Firefox)
+3. Check **"Update on reload"**
+
+Now every normal refresh (`Cmd+R`) will pick up your latest files.
+Uncheck it when you're done developing.
+
+**Nuclear option — wipe everything:**
+
+1. DevTools → Application → Service Workers → **Unregister**
+2. DevTools → Application → Cache Storage → delete `walkplayer-v1`
+3. Hard-refresh (`Cmd+Shift+R`)
 
 ## Stop
 
