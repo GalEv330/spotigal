@@ -7,127 +7,183 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="WalkPlayer" />
-
   <link rel="manifest" href="/manifest.json" />
   <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-
   <link rel="stylesheet" href="/styles.css" />
   <title>WalkPlayer</title>
 </head>
-
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <div class="logo" aria-hidden="true">🎧</div>
-      <div>
-        <div class="title">WalkPlayer</div>
-        <div class="subtitle">Batch-scheduled playback for iOS lock screen</div>
+
+  <!-- Mini-player: fixed above the screen stack, visible when audio is active -->
+  <div id="miniPlayer" class="mini-player mini-hidden">
+    <div class="mini-art" id="miniArt"></div>
+    <div class="mini-info">
+      <div class="mini-title" id="miniTitle">Not playing</div>
+      <div class="mini-artist" id="miniArtist">—</div>
+    </div>
+    <div class="mini-progress-wrap">
+      <div class="mini-progress-bar" id="miniProgressBar"></div>
+    </div>
+    <button class="mini-btn" id="miniBtnPlay" aria-label="Play/Pause">▶️</button>
+    <button class="mini-btn" id="miniBtnNext" aria-label="Next">⏭</button>
+  </div>
+
+  <!-- Screen Stack -->
+  <div class="screen-stack">
+
+    <!-- ─── HOME ─── -->
+    <div id="screenHome" class="screen screen-active">
+      <header class="topbar">
+        <div class="home-row">
+          <div class="brand">
+            <div class="logo" aria-hidden="true">🎧</div>
+            <span class="title">WalkPlayer</span>
+          </div>
+          <button id="btnNewPlaylist" class="icon-btn" aria-label="New playlist">＋</button>
+        </div>
+        <div class="search-wrap">
+          <span class="search-icon" aria-hidden="true">🔍</span>
+          <input type="search" id="searchInput" class="search-input"
+                 placeholder="Search songs or playlists…"
+                 autocomplete="off" autocorrect="off" />
+        </div>
+      </header>
+      <div class="screen-body">
+        <div id="searchPane" class="hidden">
+          <div class="section-label">Results</div>
+          <ul id="searchList" class="list px"></ul>
+        </div>
+        <div id="browsePane">
+          <div class="section-label">Your Library</div>
+          <div id="plGrid" class="pl-grid"></div>
+        </div>
       </div>
     </div>
-  </header>
 
-  <main class="wrap">
+    <!-- ─── PLAYLIST DETAIL ─── -->
+    <div id="screenDetail" class="screen screen-right">
+      <header class="topbar sub-bar">
+        <button id="btnBackDetail" class="back-btn" aria-label="Back">‹</button>
+        <span id="detailTitle" class="sub-title">Playlist</span>
+        <button id="btnDeletePlaylist" class="icon-btn icon-danger hidden" aria-label="Delete playlist">🗑</button>
+      </header>
+      <div class="screen-body">
+        <ul id="detailList" class="list px mt"></ul>
+      </div>
+    </div>
 
-    <!-- Now Playing -->
-    <section class="card nowplaying" aria-live="polite">
-      <div class="np-top">
-        <div class="album-art" id="albumArt" aria-hidden="true">
-          <span class="art-note">♪</span>
+    <!-- ─── PLAYER ─── -->
+    <div id="screenPlayer" class="screen screen-right">
+      <header class="topbar sub-bar">
+        <button id="btnBackPlayer" class="back-btn" aria-label="Back">‹</button>
+        <span id="playerPlaylistName" class="sub-title">Now Playing</span>
+        <div class="spacer44"></div>
+      </header>
+      <div class="screen-body">
+        <div class="wrap">
+
+          <section class="card nowplaying" aria-live="polite">
+            <div class="np-top">
+              <div class="album-art" id="albumArt" aria-hidden="true">
+                <span class="art-note">♪</span>
+              </div>
+              <div class="np-info">
+                <div class="np-title" id="npTitle">Not playing</div>
+                <div class="np-artist" id="npArtist">Tap Play to start</div>
+                <div class="np-meta" id="npMeta">—</div>
+              </div>
+            </div>
+            <div class="progress" id="progressTrack" role="slider"
+                 aria-label="Playback progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div class="progress-bar" id="progressBar"></div>
+              <div class="progress-thumb" id="progressThumb"></div>
+            </div>
+            <div class="time-row">
+              <button class="seek-btn" id="btnSeekBack" aria-label="5 seconds back">«5s</button>
+              <span id="timeCur">0:00</span>
+              <span id="timeTot">0:00</span>
+              <button class="seek-btn" id="btnSeekFwd" aria-label="5 seconds forward">5s»</button>
+            </div>
+            <div class="batch-progress">
+              <span class="batch-label">Batch</span>
+              <span id="batchPos">—</span>
+              <span class="batch-sep">/</span>
+              <span id="batchTot">—</span>
+            </div>
+            <div class="next-up">
+              <span class="next-label">Next</span>
+              <span class="next-track" id="nextUpTrack">—</span>
+            </div>
+          </section>
+
+          <section class="card controls">
+            <button class="btn" id="btnPrev" aria-label="Previous">
+              <span aria-hidden="true">⏮</span><span class="btn-text">Prev</span>
+            </button>
+            <button class="btn primary" id="btnPlay" aria-label="Play">
+              <span id="playIcon" aria-hidden="true">▶️</span>
+              <span class="btn-text" id="playText">Play</span>
+            </button>
+            <button class="btn" id="btnNext" aria-label="Next">
+              <span aria-hidden="true">⏭</span><span class="btn-text">Next</span>
+            </button>
+          </section>
+
+          <section class="card settings">
+            <div class="row">
+              <div>
+                <div class="label">Batch size (ahead)</div>
+                <div class="hint">Bigger = longer lock-screen playback.</div>
+              </div>
+              <div class="batch-row">
+                <button class="batch-btn" data-val="1">1</button>
+                <button class="batch-btn active" data-val="5">5</button>
+                <button class="batch-btn" data-val="10">10</button>
+                <input type="number" id="batchCustom" class="input-num batch-custom"
+                       min="1" max="999" placeholder="N" aria-label="Custom batch size" />
+              </div>
+            </div>
+            <div class="row">
+              <div>
+                <div class="label">Status</div>
+                <div class="hint" id="statusLine">Idle</div>
+              </div>
+              <button class="btn subtle" id="btnReseed">Rebuild</button>
+            </div>
+          </section>
+
+          <section class="card playlist">
+            <div class="label" id="playerListLabel">Playlist</div>
+            <div class="hint">Tap a track to jump.</div>
+            <ul id="list" class="list" aria-label="Song list"></ul>
+          </section>
+
+          <footer class="foot">Install to Home Screen on iOS for the best experience.</footer>
         </div>
-        <div class="np-info">
-          <div class="np-title" id="npTitle">Not playing</div>
-          <div class="np-artist" id="npArtist">Tap Play to start</div>
-          <div class="np-meta" id="npMeta">—</div>
-        </div>
       </div>
+    </div>
 
-      <div class="progress" id="progressTrack" role="slider" aria-label="Playback progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-        <div class="progress-bar" id="progressBar"></div>
-        <div class="progress-thumb" id="progressThumb"></div>
+  </div><!-- /screen-stack -->
+
+  <!-- ─── MODAL: NEW PLAYLIST ─── -->
+  <div id="modalNewPlaylist" class="modal-overlay modal-hidden" role="dialog" aria-modal="true">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <span class="modal-title">New Playlist</span>
+        <button id="btnCloseModal" class="icon-btn" aria-label="Close">✕</button>
       </div>
-      <div class="time-row">
-        <button class="seek-btn" id="btnSeekBack" aria-label="5 seconds back">«5s</button>
-        <span id="timeCur">0:00</span>
-        <span id="timeTot">0:00</span>
-        <button class="seek-btn" id="btnSeekFwd" aria-label="5 seconds forward">5s»</button>
+      <input type="text" id="newPlaylistName" class="text-input" placeholder="Playlist name…" maxlength="60" />
+      <div class="picker-header">
+        <span class="picker-label" id="pickerCount">Select songs</span>
+        <input type="search" id="pickerSearch" class="picker-search" placeholder="Filter…" />
       </div>
-      <div class="batch-progress">
-        <span class="batch-label">Batch</span>
-        <span id="batchPos">—</span>
-        <span class="batch-sep">/</span>
-        <span id="batchTot">—</span>
+      <ul id="pickerList" class="picker-list"></ul>
+      <div class="modal-actions">
+        <button class="btn subtle" id="btnCancelModal">Cancel</button>
+        <button class="btn primary" id="btnSavePlaylist">Create</button>
       </div>
-
-      <div class="next-up" id="nextUp">
-        <span class="next-label">Next</span>
-        <span class="next-track" id="nextUpTrack">—</span>
-      </div>
-    </section>
-
-    <!-- Controls -->
-    <section class="card controls">
-      <button class="btn" id="btnPrev" aria-label="Previous track">
-        <span aria-hidden="true">⏮</span><span class="btn-text">Prev</span>
-      </button>
-
-      <button class="btn primary" id="btnPlay" aria-label="Play">
-        <span aria-hidden="true" id="playIcon">▶️</span><span class="btn-text" id="playText">Play</span>
-      </button>
-
-      <button class="btn" id="btnNext" aria-label="Next track">
-        <span aria-hidden="true">⏭</span><span class="btn-text">Next</span>
-      </button>
-    </section>
-
-    <!-- Settings -->
-    <section class="card settings">
-      <div class="row">
-        <div>
-          <div class="label">Playlist size</div>
-          <div class="hint">How many numbered tracks are in /songs/</div>
-        </div>
-        <input type="number" id="playlistSize" class="input-num"
-               min="1" max="999" value="12" aria-label="Playlist size" />
-      </div>
-
-      <div class="row">
-        <div>
-          <div class="label">Batch size (ahead)</div>
-          <div class="hint">
-            Bigger = longer lock-screen playback, more memory.
-          </div>
-        </div>
-        <div class="batch-row">
-          <button class="batch-btn" data-val="1" aria-label="Batch size 1">1</button>
-          <button class="batch-btn active" data-val="5" aria-label="Batch size 5">5</button>
-          <button class="batch-btn" data-val="10" aria-label="Batch size 10">10</button>
-          <input type="number" id="batchCustom" class="input-num batch-custom"
-                 min="1" max="999" placeholder="N" aria-label="Custom batch size" />
-        </div>
-      </div>
-
-      <div class="row">
-        <div>
-          <div class="label">Status</div>
-          <div class="hint" id="statusLine">Idle</div>
-        </div>
-        <button class="btn subtle" id="btnReseed" aria-label="Rebuild scheduled batch">
-          Rebuild batch
-        </button>
-      </div>
-    </section>
-
-    <!-- Playlist -->
-    <section class="card playlist">
-      <div class="label">Playlist</div>
-      <div class="hint">Tap a track to jump (will rebuild the batch).</div>
-      <ul id="list" class="list" aria-label="Song list"></ul>
-    </section>
-
-    <footer class="foot">
-      Tip: Install to Home Screen for a native app feel on iOS.
-    </footer>
-  </main>
+    </div>
+  </div>
 
   <script type="module" src="/app.js"></script>
 </body>
